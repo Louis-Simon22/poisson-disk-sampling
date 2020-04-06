@@ -1,0 +1,11 @@
+[package]
+name = "poisson-disk-sampling"
+version = "0.1.0"
+authors = ["Louis-Simon Mc Nicoll <mail@louissimonmcnicoll.com>"]
+edition = "2018"
+publish = false
+
+[dependencies]
+rand = "0.7"
+rand_distr = "0.2"
+ndarray = "0.13.0"
