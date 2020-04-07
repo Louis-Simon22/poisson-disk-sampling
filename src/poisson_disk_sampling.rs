@@ -36,6 +36,19 @@ pub fn generate(extents: Point, r: f32, k: i32) -> Vec<Point> {
     samples
 }
 
+pub fn recursive_neighbors(indices: &Vec<usize>, dimension: usize) {
+    if dimension < indices.len() {
+        let mut new_indices = indices.clone();
+        for k in &[-1, 0, 1] {
+            new_indices[dimension] = (indices[dimension] as isize + k) as usize;
+            // do stuff
+            recursive_neighbors(&new_indices, dimension + 1);
+        }
+    } else {
+        println!("{:?}", indices);
+    }
+}
+
 fn check_point_is_valid(
     point: &Vec<f32>,
     cell_size: f32,
@@ -43,16 +56,9 @@ fn check_point_is_valid(
     background_grid: &Array<isize, IxDyn>,
     r: f32,
 ) -> bool {
-    let central_indices = point_divide_scalar(point, cell_size);
-    let mut indices = central_indices.clone();
-    for _ in 0..indices.len() {
-        for dimension in 0..indices.len() {
-            for i in -(1 as isize)..1 {
-                indices[dimension] = (central_indices[dimension] as isize + i) as usize;
-                println!("{} : {}", dimension, indices[dimension]);
-            }
-        }
-    }
+    let indices = point_divide_scalar(point, cell_size);
+    println!("=={:?}==", indices);
+    recursive_neighbors(&indices, 0);
     let ix_dyn = IxDyn(&indices); // TODO add this to the ndarray doc
     let bg_index = background_grid[ix_dyn];
     if bg_index >= 0 {
