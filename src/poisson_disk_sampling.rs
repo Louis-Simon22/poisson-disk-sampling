@@ -2,9 +2,15 @@ use ndarray::{Array, IxDyn};
 use rand::prelude::*;
 use rand_distr::{StandardNormal, Uniform};
 
+macro_rules! clamp {
+    ($value:expr, $min_value:expr, $max_value:expr) => {
+        $value.max($min_value).min($max_value)
+    };
+}
+
 type Point = Vec<f32>;
 
-pub fn generate(extents: Point, r: f32, k: i32) -> Vec<Point> {
+pub fn generate(extents: &Point, r: f32, k: i32) -> Vec<Point> {
     let dimensions = extents.len();
     let cell_size = r / (dimensions as f32).sqrt();
     let mut samples = Vec::<Point>::new();
@@ -21,10 +27,10 @@ pub fn generate(extents: Point, r: f32, k: i32) -> Vec<Point> {
         let active_point = &samples[active_list[active_list.len() - 1]];
         for _ in 0..k {
             let new_point = random_point_in_hollow_sphere(&active_point, r, r * 2.0);
-            // TODO Pad the background grid instead
+            // TODO Pad the background grid instead?
             let clamped_point = clamp_point(&new_point, &vec![0.0, 0.0], &extents);
             if check_point_is_valid(&clamped_point, cell_size, &samples, &background_grid, r) {
-                samples.push(new_point);
+                samples.push(clamped_point);
                 active_list.push(samples.len() - 1);
                 continue 'outer;
             }
@@ -36,19 +42,6 @@ pub fn generate(extents: Point, r: f32, k: i32) -> Vec<Point> {
     samples
 }
 
-pub fn recursive_neighbors(indices: &Vec<usize>, dimension: usize) {
-    if dimension < indices.len() {
-        let mut new_indices = indices.clone();
-        for k in &[-1, 0, 1] {
-            new_indices[dimension] = (indices[dimension] as isize + k) as usize;
-            // do stuff
-            recursive_neighbors(&new_indices, dimension + 1);
-        }
-    } else {
-        println!("{:?}", indices);
-    }
-}
-
 fn check_point_is_valid(
     point: &Vec<f32>,
     cell_size: f32,
@@ -56,18 +49,38 @@ fn check_point_is_valid(
     background_grid: &Array<isize, IxDyn>,
     r: f32,
 ) -> bool {
-    let indices = point_divide_scalar(point, cell_size);
-    println!("=={:?}==", indices);
-    recursive_neighbors(&indices, 0);
-    let ix_dyn = IxDyn(&indices); // TODO add this to the ndarray doc
-    let bg_index = background_grid[ix_dyn];
-    if bg_index >= 0 {
-        let background_point = &samples[bg_index as usize];
-        let too_close = point_distance(point, background_point) > r;
-        too_close
-    } else {
-        true
+    // These are the indices of the cell where the point would be located
+    let mut indices = Vec::<usize>::with_capacity(point.len());
+    for i in 0..point.len() {
+        let index = (point[i] / cell_size).floor() as usize;
+        indices.push(if index > 0 { index - 1 } else { index });
     }
+    let indices = indices; // Remove mut
+
+    let one_dimension_count: usize = 3;
+    let number_of_neighbors = one_dimension_count.pow(indices.len() as u32);
+    for i in 0..number_of_neighbors {
+        let mut counter = i;
+        let mut new_indices = indices.clone();
+        for dim in (1..indices.len()).rev() {
+            let multiple = one_dimension_count.pow(dim as u32);
+            let multiple_count = counter / multiple;
+            let dimension = indices.len() - 1 - dim;
+            new_indices[dimension] = indices[dimension] + multiple_count;
+            counter -= multiple_count * multiple;
+        }
+        new_indices[indices.len() - 1] = indices[indices.len() - 1] + counter % 3;
+
+        let ix_dyn = IxDyn(&new_indices); // TODO add this to the ndarray doc
+        let bg_index = background_grid[ix_dyn];
+        if bg_index >= 0 {
+            let background_point = &samples[bg_index as usize];
+            if point_distance(point, background_point) < r / 2. {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn point_distance(p1: &Vec<f32>, p2: &Vec<f32>) -> f32 {
@@ -95,6 +108,8 @@ fn random_point_in_square(lower: &Vec<f32>, higher: &Vec<f32>) -> Vec<f32> {
 fn random_point_in_hollow_sphere(center: &Vec<f32>, r_min: f32, r_max: f32) -> Vec<f32> {
     let dimensions = center.len();
     let point_on_unit_n_sphere = random_point_on_unit_n_sphere(dimensions);
+    // TODO check that the radius of the unit sphere is correct
+    //let unit_radius = 
     let radius = rand::thread_rng().sample(Uniform::from(r_min..r_max));
     let point_in_n_sphere = point_mult_scalar(
         &point_on_unit_n_sphere,
@@ -122,7 +137,7 @@ fn random_point_on_unit_n_sphere(dimensions: usize) -> Vec<f32> {
 fn clamp_point(point: &Point, lower: &Point, higher: &Point) -> Point {
     let mut clamped_point = Point::with_capacity(point.len());
     for i in 0..point.len() {
-        clamped_point.push(higher[i].min(point[i].max(lower[i])));
+        clamped_point.push(clamp!(point[i], lower[i], higher[i]));
     }
     clamped_point
 }
