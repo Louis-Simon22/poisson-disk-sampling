@@ -1,6 +1,7 @@
 use ndarray::{Array, IxDyn};
 use rand::prelude::*;
 use rand_distr::{StandardNormal, Uniform};
+use std::vec;
 
 macro_rules! clamp {
     ($value:expr, $min_value:expr, $max_value:expr) => {
@@ -8,82 +9,127 @@ macro_rules! clamp {
     };
 }
 
+// TODO test this
+// TODO extend the Point type with the add/divide etc methods as operations
+// TODO Make this code generic using Index trait, implement one for vec
+
 type Point = Vec<f32>;
-
-pub fn generate(extents: &Point, r: f32, k: i32) -> Vec<Point> {
-    let dimensions = extents.len();
-    let cell_size = r / (dimensions as f32).sqrt();
-    let mut samples = Vec::<Point>::new();
-    let mut active_list = Vec::<usize>::new();
-    let background_grid_shape = point_add_scalar(&point_divide_scalar(&extents, cell_size), 1);
-    let mut background_grid = Array::from_elem(background_grid_shape, -1 as isize);
-
-    samples.push(random_point_in_square(&vec![0.0, 0.0], &extents));
-    active_list.push(0);
-    let indices = point_divide_scalar(&samples[0], cell_size);
-    let ix_dyn = IxDyn(&indices);
-    background_grid[ix_dyn] = 0;
-    'outer: while !active_list.is_empty() {
-        let active_point = &samples[active_list[active_list.len() - 1]];
-        for _ in 0..k {
-            let new_point = random_point_in_hollow_sphere(&active_point, r, r * 2.0);
-            // TODO Pad the background grid instead?
-            let clamped_point = clamp_point(&new_point, &vec![0.0, 0.0], &extents);
-            if check_point_is_valid(&clamped_point, cell_size, &samples, &background_grid, r) {
-                samples.push(clamped_point);
-                active_list.push(samples.len() - 1);
-                continue 'outer;
-            }
-        }
-        // If no valid point could be generated
-        active_list.pop();
-    }
-
-    samples
-}
-
-fn check_point_is_valid(
-    point: &Vec<f32>,
+pub struct PoissonDiskSampling {
+    extents: Point,
     cell_size: f32,
-    samples: &Vec<Vec<f32>>,
-    background_grid: &Array<isize, IxDyn>,
-    r: f32,
-) -> bool {
-    // These are the indices of the cell where the point would be located
-    let mut indices = Vec::<usize>::with_capacity(point.len());
-    for i in 0..point.len() {
-        let index = (point[i] / cell_size).floor() as usize;
-        indices.push(if index > 0 { index - 1 } else { index });
-    }
-    let indices = indices; // Remove mut
-
-    let one_dimension_count: usize = 3;
-    let number_of_neighbors = one_dimension_count.pow(indices.len() as u32);
-    for i in 0..number_of_neighbors {
-        let mut counter = i;
-        let mut new_indices = indices.clone();
-        for dim in (1..indices.len()).rev() {
-            let multiple = one_dimension_count.pow(dim as u32);
-            let multiple_count = counter / multiple;
-            let dimension = indices.len() - 1 - dim;
-            new_indices[dimension] = indices[dimension] + multiple_count;
-            counter -= multiple_count * multiple;
-        }
-        new_indices[indices.len() - 1] = indices[indices.len() - 1] + counter % 3;
-
-        let ix_dyn = IxDyn(&new_indices); // TODO add this to the ndarray doc
-        let bg_index = background_grid[ix_dyn];
-        if bg_index >= 0 {
-            let background_point = &samples[bg_index as usize];
-            if point_distance(point, background_point) < r / 2. {
-                return false;
-            }
-        }
-    }
-    true
+    samples: Vec<Point>,
+    background_grid: Array<Option<usize>, IxDyn>,
+    active_list: Vec<usize>,
+    minimum_distance: f32,
+    maximum_iterations: i32,
+    dimensions: i32,
 }
 
-fn point_distance(p1: &Vec<f32>, p2: &Vec<f32>) -> f32 {
+impl PoissonDiskSampling {
+    pub fn new(
+        extents: Point,
+        minimum_distance: f32,
+        maximum_iterations: i32,
+        dimensions: i32,
+    ) -> PoissonDiskSampling {
+        let cell_size = minimum_distance / (dimensions as f32).sqrt();
+        let background_grid_shape =
+            point_add_scalar(&point_integer_divide_scalar(&extents, cell_size), 1);
+        let pds = PoissonDiskSampling {
+            extents,
+            cell_size,
+            samples: Vec::<Point>::new(),
+            background_grid: Array::from_elem(background_grid_shape, None),
+            active_list: Vec::<usize>::new(),
+            minimum_distance,
+            maximum_iterations,
+            dimensions,
+        };
+        pds
+    }
+
+    pub fn generate_once(
+        extents: Point,
+        minimum_distance: f32,
+        maximum_iterations: i32,
+        dimensions: i32,
+    ) -> Vec<Point> {
+        let pds =
+            PoissonDiskSampling::new(extents, minimum_distance, maximum_iterations, dimensions);
+        pds.generate()
+    }
+
+    pub fn generate(&mut self) -> Vec<Point> {
+        self.samples
+            .push(random_point_in_square(&vec![0.0, 0.0], &self.extents));
+        self.active_list.push(0);
+        let indices = point_integer_divide_scalar(&self.samples[0], self.cell_size);
+        let ix_dyn = IxDyn(&indices);
+        self.background_grid[ix_dyn] = Some(0);
+        'outer: while !self.active_list.is_empty() {
+            let active_point = &self.samples[self.active_list[self.active_list.len() - 1]];
+            for _ in 0..self.maximum_iterations {
+                let new_point = random_point_in_hollow_sphere(
+                    &active_point,
+                    self.minimum_distance,
+                    self.minimum_distance * 2.0,
+                );
+                // TODO For performance maybe add padding to the background grid instead?
+                let clamped_point = clamp_point(&new_point, &vec![0.0, 0.0], &self.extents);
+                if self.check_point_is_valid(&clamped_point) {
+                    self.samples.push(clamped_point);
+                    self.active_list.push(self.samples.len() - 1);
+                    continue 'outer;
+                }
+            }
+            // If no valid point could be generated
+            self.active_list.pop();
+        }
+
+        self.samples
+    }
+
+    fn check_point_is_valid(&self, point: &Point) -> bool {
+        // These are the indices of the cell where the point would be located
+        let mut indices = Vec::<usize>::with_capacity(point.len());
+        for i in 0..point.len() {
+            let index = (point[i] / self.cell_size).floor() as usize;
+            indices.push(if index > 0 { index - 1 } else { index });
+        }
+        let indices = indices;
+
+        let one_dimension_count: usize = 3;
+        let number_of_neighbors = one_dimension_count.pow(indices.len() as u32);
+        for i in 0..number_of_neighbors {
+            let mut counter = i;
+            let mut new_indices = indices.clone();
+            for dim in (1..indices.len()).rev() {
+                let multiple = one_dimension_count.pow(dim as u32);
+                let multiple_count = counter / multiple;
+                let dimension = indices.len() - 1 - dim;
+                new_indices[dimension] = indices[dimension] + multiple_count;
+                counter -= multiple_count * multiple;
+            }
+            new_indices[indices.len() - 1] = indices[indices.len() - 1] + counter % 3;
+
+            let ix_dyn = IxDyn(&new_indices); // TODO add this to the ndarray doc
+            let bg_index_opt = self.background_grid[ix_dyn];
+            match bg_index_opt {
+                Some(bg_index) => {
+                    if bg_index >= 0 {
+                        let background_point = &self.samples[bg_index as usize];
+                        if point_distance(point, background_point) < self.minimum_distance / 2. {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
+}
+
+fn point_distance(p1: &Point, p2: &Point) -> f32 {
     assert!(p1.len() == p2.len());
     let dimensions = p1.len();
     let mut squared_sum = 0.0;
@@ -94,7 +140,7 @@ fn point_distance(p1: &Vec<f32>, p2: &Vec<f32>) -> f32 {
     squared_sum.sqrt()
 }
 
-fn random_point_in_square(lower: &Vec<f32>, higher: &Vec<f32>) -> Vec<f32> {
+fn random_point_in_square(lower: &Point, higher: &Point) -> Point {
     assert!(lower.len() == higher.len());
     let dimensions = lower.len();
     let mut point = Vec::<f32>::with_capacity(dimensions);
@@ -105,11 +151,11 @@ fn random_point_in_square(lower: &Vec<f32>, higher: &Vec<f32>) -> Vec<f32> {
 }
 
 // https://en.wikipedia.org/wiki/N-sphere#Uniformly_at_random_within_the_n-ball
-fn random_point_in_hollow_sphere(center: &Vec<f32>, r_min: f32, r_max: f32) -> Vec<f32> {
+fn random_point_in_hollow_sphere(center: &Point, r_min: f32, r_max: f32) -> Point {
     let dimensions = center.len();
     let point_on_unit_n_sphere = random_point_on_unit_n_sphere(dimensions);
     // TODO check that the radius of the unit sphere is correct
-    //let unit_radius = 
+    //let unit_radius =
     let radius = rand::thread_rng().sample(Uniform::from(r_min..r_max));
     let point_in_n_sphere = point_mult_scalar(
         &point_on_unit_n_sphere,
@@ -119,7 +165,7 @@ fn random_point_in_hollow_sphere(center: &Vec<f32>, r_min: f32, r_max: f32) -> V
 }
 
 // https://en.wikipedia.org/wiki/N-sphere#Generating_random_points
-fn random_point_on_unit_n_sphere(dimensions: usize) -> Vec<f32> {
+fn random_point_on_unit_n_sphere(dimensions: usize) -> Point {
     let mut squared_sum: f32 = 0.0;
     let mut point = Vec::<f32>::with_capacity(dimensions);
     for _ in 0..dimensions {
@@ -142,7 +188,7 @@ fn clamp_point(point: &Point, lower: &Point, higher: &Point) -> Point {
     clamped_point
 }
 
-fn point_add_point(left: &Vec<f32>, right: &Vec<f32>) -> Vec<f32> {
+fn point_add_point(left: &Point, right: &Point) -> Point {
     assert!(left.len() == right.len());
     let mut point = Vec::<f32>::with_capacity(left.len());
     for i in 0..left.len() {
@@ -162,18 +208,18 @@ where
     point
 }
 
-fn point_mult_scalar(left: &Vec<f32>, right: f32) -> Vec<f32> {
-    let mut point = Vec::<f32>::with_capacity(left.len());
+fn point_mult_scalar(left: &Point, right: f32) -> Point {
+    let mut point = left.clone();
     for i in 0..left.len() {
-        point.push(left[i] * right);
+        point[i] = left[i] * right;
     }
     point
 }
 
-fn point_divide_scalar(left: &Vec<f32>, right: f32) -> Vec<usize> {
+fn point_integer_divide_scalar(left: &Point, right: f32) -> Vec<usize> {
     let mut point = Vec::<usize>::with_capacity(left.len());
     for i in 0..left.len() {
-        point.push((left[i] / right).floor() as usize);
+        point.push((left[i] / right) as usize);
     }
     point
 }
