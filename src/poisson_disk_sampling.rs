@@ -21,16 +21,16 @@ pub struct PoissonDiskSampling {
     background_grid: Array<Option<usize>, IxDyn>,
     active_list: Vec<usize>,
     minimum_distance: f32,
-    maximum_iterations: i32,
-    dimensions: i32,
+    maximum_iterations: u32,
+    dimensions: u32,
 }
 
 impl PoissonDiskSampling {
     pub fn new(
         extents: Point,
         minimum_distance: f32,
-        maximum_iterations: i32,
-        dimensions: i32,
+        maximum_iterations: u32,
+        dimensions: u32,
     ) -> PoissonDiskSampling {
         let cell_size = minimum_distance / (dimensions as f32).sqrt();
         let background_grid_shape =
@@ -51,15 +51,16 @@ impl PoissonDiskSampling {
     pub fn generate_once(
         extents: Point,
         minimum_distance: f32,
-        maximum_iterations: i32,
-        dimensions: i32,
+        maximum_iterations: u32,
+        dimensions: u32,
     ) -> Vec<Point> {
-        let pds =
+        let mut pds =
             PoissonDiskSampling::new(extents, minimum_distance, maximum_iterations, dimensions);
-        pds.generate()
+        pds.generate();
+        pds.samples
     }
 
-    pub fn generate(&mut self) -> Vec<Point> {
+    pub fn generate(&mut self) {
         self.samples
             .push(random_point_in_square(&vec![0.0, 0.0], &self.extents));
         self.active_list.push(0);
@@ -85,44 +86,41 @@ impl PoissonDiskSampling {
             // If no valid point could be generated
             self.active_list.pop();
         }
-
-        self.samples
     }
 
     fn check_point_is_valid(&self, point: &Point) -> bool {
         // These are the indices of the cell where the point would be located
-        let mut indices = Vec::<usize>::with_capacity(point.len());
+        let mut cell_indices = Vec::<usize>::with_capacity(point.len());
         for i in 0..point.len() {
             let index = (point[i] / self.cell_size).floor() as usize;
-            indices.push(if index > 0 { index - 1 } else { index });
+            cell_indices.push(if index > 0 { index - 1 } else { index });
         }
-        let indices = indices;
+        let cell_indices = cell_indices;
 
-        let one_dimension_count: usize = 3;
-        let number_of_neighbors = one_dimension_count.pow(indices.len() as u32);
-        for i in 0..number_of_neighbors {
+        const ONE_DIMENSION_NEIGHBOR_CELLS_COUNT: usize = 3;
+        let neighbor_cells_count = ONE_DIMENSION_NEIGHBOR_CELLS_COUNT.pow(self.dimensions);
+        for i in 0..neighbor_cells_count {
             let mut counter = i;
-            let mut new_indices = indices.clone();
-            for dim in (1..indices.len()).rev() {
-                let multiple = one_dimension_count.pow(dim as u32);
+            let mut new_indices = cell_indices.clone();
+            for dim in (1..cell_indices.len()).rev() {
+                let multiple = ONE_DIMENSION_NEIGHBOR_CELLS_COUNT.pow(dim as u32);
                 let multiple_count = counter / multiple;
-                let dimension = indices.len() - 1 - dim;
-                new_indices[dimension] = indices[dimension] + multiple_count;
+                let dimension = cell_indices.len() - 1 - dim;
+                new_indices[dimension] = cell_indices[dimension] + multiple_count;
                 counter -= multiple_count * multiple;
             }
-            new_indices[indices.len() - 1] = indices[indices.len() - 1] + counter % 3;
+            new_indices[cell_indices.len() - 1] = cell_indices[cell_indices.len() - 1] + counter % 3;
 
             let ix_dyn = IxDyn(&new_indices); // TODO add this to the ndarray doc
             let bg_index_opt = self.background_grid[ix_dyn];
             match bg_index_opt {
                 Some(bg_index) => {
-                    if bg_index >= 0 {
-                        let background_point = &self.samples[bg_index as usize];
-                        if point_distance(point, background_point) < self.minimum_distance / 2. {
-                            return false;
-                        }
+                    let background_point = &self.samples[bg_index];
+                    if point_distance(point, background_point) < self.minimum_distance / 2.0 {
+                        return false;
                     }
-                }
+                },
+                None => {}
             }
         }
         true
@@ -199,7 +197,7 @@ fn point_add_point(left: &Point, right: &Point) -> Point {
 
 fn point_add_scalar<Scalar>(left: &Vec<Scalar>, right: Scalar) -> Vec<Scalar>
 where
-    Scalar: std::ops::Add<Output = Scalar> + Copy,
+    Scalar: std::ops::Add<Output = Scalar> + Copy + std::fmt::Debug,
 {
     let mut point = Vec::<Scalar>::with_capacity(left.len());
     for i in 0..left.len() {
