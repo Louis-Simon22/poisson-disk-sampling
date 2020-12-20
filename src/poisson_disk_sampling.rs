@@ -97,19 +97,36 @@ impl PoissonDiskSampling {
         }
         let cell_indices = cell_indices;
 
+        // indices = [3, 5, 10]
+        // dimension_basis = [9, 3, 1]
+        // neighbor_count = pow(3, len(indices))
+        // print(neighbor_count)
+        // for i in range(neighbor_count):
+        //     current_count = i
+        //     new_indices = indices.copy()
+        //     for dim,basis in enumerate(dimension_basis):
+        //         dim_count = current_count // basis
+        //         current_count -= dim_count * basis
+        //         new_indices[dim] += dim_count
+        //     print(new_indices)
+
+        // TODO comment this code
         const ONE_DIMENSION_NEIGHBOR_CELLS_COUNT: usize = 3;
         let neighbor_cells_count = ONE_DIMENSION_NEIGHBOR_CELLS_COUNT.pow(self.dimensions);
         for i in 0..neighbor_cells_count {
             let mut counter = i;
             let mut new_indices = cell_indices.clone();
-            for dim in (1..cell_indices.len()).rev() {
+            for dim in (0..cell_indices.len()).rev() {
                 let multiple = ONE_DIMENSION_NEIGHBOR_CELLS_COUNT.pow(dim as u32);
                 let multiple_count = counter / multiple;
-                let dimension = cell_indices.len() - 1 - dim;
-                new_indices[dimension] = cell_indices[dimension] + multiple_count;
+                let new_index = new_indices[dim] + multiple_count;
+                new_indices[dim] = match new_index.checked_sub(1) {
+                    Some(new_index) => new_index,
+                    None => new_index
+                };
                 counter -= multiple_count * multiple;
             }
-            new_indices[cell_indices.len() - 1] = cell_indices[cell_indices.len() - 1] + counter % 3;
+            // TODO new_indices is sometimes out of range (clamp it? Make the array bigger?)
 
             let ix_dyn = IxDyn(&new_indices); // TODO add this to the ndarray doc
             let bg_index_opt = self.background_grid[ix_dyn];
